@@ -1,0 +1,16 @@
+[project]
+name = "obibok"
+version = "0.1.0"
+description = "Deep Agents running in Docker"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pytest",
+    "langchain",
+    "langchain-openai",
+    "langchain-mcp-adapters",
+    "deepagents",
+]
+
+[tool.uv]
+package = false
