@@ -11,11 +11,6 @@ najpierw utwórz listę zadań (TODO),
 oznacz zadania jako in_progress, gdy nad nimi pracujesz,
 oznacz zadania jako completed, gdy je ukończysz,
 aktualizuj listę zadań, gdy plan ulegnie zmianie.
-
-Jesteś głównym agentem.
-Nie wykonuj zadań związanych z analizą plików, jeżeli użytkownik pyta o analize zawartości plików lub potrzebujesz
-przeanalizować większą liczbę plików, deleguj to do file_reader.
-Następnie wykorzystaj jego podsumowanie do udzielenia odpowiedzi.
 """
 
 
