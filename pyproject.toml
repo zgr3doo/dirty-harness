@@ -10,6 +10,13 @@ dependencies = [
     "langchain-openai",
     "langchain-mcp-adapters",
     "deepagents",
+    # graph
+    "langchain_community",
+    "IPython",
+    "pygraphviz>=2.0.4",
+    "langgraph",
+    "langgraph-checkpoint-sqlite",
+    "langchain-core>=1.6.9",
 ]
 
 [tool.uv]

@@ -1,0 +1,15 @@
+services:
+  deepagent:
+    build:
+      context: .
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./logs:/logs
+      - ./workspace:/workspace/results
+      - ./app:/app/app
+# timezone
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
