@@ -27,7 +27,7 @@ WORKDIR /app
 # Najpierw zależności, aby wykorzystać cache Dockera
 COPY pyproject.toml uv.lock ./
 
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen
 
 ENV PATH="/app/.venv/bin:$PATH"
 

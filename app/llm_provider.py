@@ -9,6 +9,7 @@ def connect_to_llm() -> ChatOpenAI:
         api_key="lm-studio",
         # model="google/gemma-4-12b",
         # model="tiel-coder-35b-a3b-mtp",
+        # model="muse-glimmer-30b",
         model="qwen3.8-27b",
         # model="qwen3.6-27b-claude-opus-reasoning-distilled@q4_k_m",
         # model="qwen3.6-27b-claude-opus-reasoning-distilled",

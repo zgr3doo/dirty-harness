@@ -8,7 +8,7 @@ services:
     tty: true
     volumes:
       - ./logs:/logs
-      - ./workspace:/workspace/results
+      - ./workspace:/workspace
       - ./app:/app/app
 # timezone
       - /etc/localtime:/etc/localtime:ro

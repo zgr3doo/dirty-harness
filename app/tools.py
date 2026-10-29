@@ -1,27 +1,24 @@
-# tools.py — narzedzia agenta. run_tests to WERYFIKATOR (serce harnessu).
-import sys
+import sys, json
 import subprocess
 from pathlib import Path
 from langchain.tools import tool, ToolRuntime
 from dataclasses import dataclass
 from uuid import uuid4
-from deepagents.backends import FilesystemBackend
-
+from deepagents.backends import LocalShellBackend, FilesystemBackend
+from langchain_community.tools import ReadFileTool
+from code_reader_agent import CodeReadingAgent
+from llm_provider import connect_to_llm
 import os
 import tempfile
 
-WORK = Path("workspace")
-
-@dataclass
-class Ctx:
-    user_id: str
-
-workspace = Path("/").resolve()
+ALLOWED_DIR = Path("/workspace").resolve()
 
 backend = FilesystemBackend(
-    root_dir=str(workspace),
+    root_dir=str(ALLOWED_DIR),
     virtual_mode=True,
 )
+
+llm = connect_to_llm()
 
 @tool
 def read_file(
@@ -32,15 +29,15 @@ def read_file(
     """Odczytaj plik tekstowy.
 
     Args:
-        file_path: Ścieżka do pliku, np. /example.txt.
-        offset: Numer linii, od której zacząć (od 0).
-        limit: Maksymalna liczba linii do odczytania.
+        file_path: File path, eg. /example.txt.
+        offset: Line number, from which to start reading (from 0).
+        limit: Max line count to be read.
     """
     if offset < 0:
-        return "Błąd: offset nie może być ujemny."
+        return "Error: offset must be positive"
 
     if limit < 1:
-        return "Błąd: limit musi być większy od 0."
+        return "Error: limit must be bigger than 0"
 
     result = backend.read(
         file_path=file_path,
@@ -49,52 +46,52 @@ def read_file(
     )
 
     if result.error:
-        return f"Błąd odczytu pliku: {result.error}"
+        return f"Error: {result.error}"
 
     if result.file_data is None:
-        return "Brak zawartości pliku."
+        return "File is empty"
 
     return result.file_data["content"]
 
 @tool
 def write_file(file_path: str, content: str) -> str:
-    """Zapisz tekst do pliku.
-
+    """
+    Save the text to a file
     Args:
-        file_path: Ścieżka pliku, np. /example.txt.
-        content: Treść do zapisania.
+        file_path: File path, e.g., /report.txt.
+        content: Content to save.
     """
     result = backend.write(
-        file_path=file_path,
+        file_path="/" + file_path,
         content=content,
     )
 
     if result.error:
-        return f"Błąd zapisu: {result.error}"
+        return f"Error: {result.error}"
 
-    return f"Plik zapisany: {result.path}"
-
+    return f"File saved: {result.path}"
 
 @tool
 def create_file(file_path: str) -> str:
-    """Utwórz nowy, pusty plik. Nie nadpisuj istniejących plików."""
+    """
+    Create a new, empty file.
+    Do not overwrite existing files.
+    """
 
-    # Sprawdź, czy plik już istnieje
-    result = backend.read(file_path)
+    result = backend.read(str(file_path))
 
     if result.file_data is not None:
-        return f"Plik już istnieje: {file_path}"
+        return f"Error: file exists - {file_path}"
 
-    # Utwórz pusty plik
     result = backend.write(
-        file_path=file_path,
+        file_path=str(file_path),
         content="",
     )
 
     if result.error:
-        return f"Błąd tworzenia pliku: {result.error}"
+        return f"Error: {result.error}"
 
-    return f"Utworzono plik: {file_path}"
+    return f"File created: {result.path}"
 
 @tool
 def ls(path: str = ".") -> str:
@@ -102,35 +99,48 @@ def ls(path: str = ".") -> str:
     try:
         result = backend.ls(path)
     except ValueError as exc:
-        return f"Error listing directory: {exc}"
+        if "Path traversal not allowed" in str(exc):
+            return f"Invalid path: {path}"
+        raise
 
     if result.error:
         return f"Error: {result.error}"
 
     return "\n".join(
-        f"{'DIR ' if item.get('is_dir') else 'FILE'} {item['path']}"
+        f"{'DIR ' if item.get('is_dir', False) else 'FILE'} {item.get('path', '<unknown>')}"
         for item in result.entries
     )
 
 @tool
 def glob(pattern: str, path: str = "/") -> str:
-    """Find files matching a glob pattern under the specified path.
+    """Find files matching a glob pattern under the allowed directory.
 
     Args:
         pattern: Glob pattern, e.g. '**/*.py' or '*.txt'.
-        path: Base directory to search from. Defaults to '/'.
+        path: Base directory to search from. Must be inside ALLOWED_DIR.
     """
-    result = backend.glob(pattern=pattern, path=path)
+    try:
+        result = backend.glob(
+            pattern=pattern,
+            path=str(path),
+        )
 
-    if result.error:
-        return f"Error: {result.error}"
+        if result.error:
+            return f"Error: {result.error}"
 
-    if not result.matches:
-        return "No files found."
+        if not result.matches:
+            return "No files found."
 
-    return "\n".join(
-        item["path"] for item in result.matches
-    )
+        return "\n".join(
+            match if isinstance(match, str)
+            else json.dumps(match, ensure_ascii=False)
+            for match in result.matches
+        )
+
+    except ValueError as exc:
+        if "Path traversal not allowed" in str(exc):
+            return f"Error: invalid path - {path}"
+        raise
 
 @tool
 def run_pytest(
@@ -142,31 +152,36 @@ def run_pytest(
 
     Args:
         path: Ścieżka do katalogu z testami lub pliku testowego.
-        extra_args: Opcjonalne argumenty pytest, np. ["-v", "-x"].
+        extra_args: Opcjonalne argumenty pytest, allowed are ["-v", "-vv", "-q", "-x", "--tb=short", "--tb=long"]. ["-v", "-x"].
 
     Returns:
         Raport z wykonania testów, zawierający status i output.
     """
-    project_root = Path.cwd().resolve()
-    target = (project_root / path).resolve()
 
-    # Nie pozwalaj uruchamiać testów poza katalogiem projektu.
-    if not target.is_relative_to(project_root):
-        return "Błąd: ścieżka do testów musi znajdować się w projekcie."
+    try:
+        result = backend.read(str(path))
 
-    if not target.exists():
-        return f"Błąd: ścieżka nie istnieje: {path}"
+        if result.file_data is None:
+            target = Path(backend.cwd) / path
+            # return f"Error: test file not exists - {path}"
+        else:
+            target = Path(backend.cwd) / path.lstrip("/")
+
+    except ValueError as exc:
+        if "Path traversal not allowed" in str(exc):
+            return f"Invalid path: {path}"
+        raise
 
     args = extra_args or []
 
     # Ogranicz argumenty do bezpiecznego zestawu.
     allowed_flags = {"-v", "-vv", "-q", "-x", "--tb=short", "--tb=long"}
     if any(arg not in allowed_flags for arg in args):
-        return "Błąd: niedozwolone argumenty pytest."
+        return "Error: not allowed arguments."
 
     try:
         result = subprocess.run([sys.executable, "-m", "pytest", str(target), *args,],
-            cwd=project_root,
+            cwd=Path(backend.cwd),
             capture_output=True,
             text=True,
             timeout=120,
@@ -187,9 +202,65 @@ def run_pytest(
         )
 
     except subprocess.TimeoutExpired:
-        return "TIMEOUT: testy przekroczyły limit 120 sekund."
+        return "TIMEOUT: tests exceeded the 120-second time limit"
     except OSError as exc:
-        return f"Błąd uruchamiania pytest: {exc}"
+        return f"Error: running pytest - {exc}"
+
+@tool
+def validate_python_file(path: str) -> str:
+    """Waliduje plik Python za pomocą Ruff i zwraca wykryte problemy.
+
+    Args:
+        file_path: Ścieżka względna do pliku, np. /src/main.py.
+    """
+
+    try:
+        result = backend.read(str(path))
+
+        if result.file_data is None:
+            return f"Error: test file not exists - {path}"
+
+        target = Path(backend.cwd) / path.lstrip("/")
+
+        result = subprocess.run(
+            [
+                "ruff",
+                "check",
+                "--output-format=concise",
+                "--stdin-filename",
+                target,
+                "-",
+            ],
+            input=result.file_data["content"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            cwd=Path(backend.cwd),
+        )
+
+    except ValueError as exc:
+        if "Path traversal not allowed" in str(exc):
+            return f"Invalid path: {path}"
+        raise
+
+    except FileNotFoundError:
+        return "Error: file does not exist or Ruff is not available"
+    except subprocess.TimeoutExpired:
+        return "Error: Ruff exceeded the 30-second time limit"
+    except Exception as exc:
+        return f"Error: {exc}"
+
+    if result.returncode == 0:
+        return f"Success: no problems detected in file {path}."
+
+    if result.returncode == 1:
+        return (
+            f"Results for  {path}:\n"
+            f"{result.stdout or 'Issues found'}"
+        )
+
+    return f"Error:\n{result.stderr or result.stdout}"
 
 @tool
 def validate_puml(code: str) -> str:
@@ -255,28 +326,42 @@ def validate_puml(code: str) -> str:
     except OSError as exc:
         return f"ERROR: Could not execute PlantUML: {exc}"
 
-@tool
-def remember(text: str, runtime: ToolRuntime[Ctx]) -> str:
-    """Zapisz TRWAŁY fakt o użytkowniku/projekcie. Nie zapisuj PII ani sekretów."""
-    ns = (runtime.context.user_id, "facts")
-    runtime.store.put(ns, str(uuid4()), {"text": text})
-    return "Zapamiętane."
 
 @tool
-def recall(query: str, runtime: ToolRuntime[Ctx]) -> str:
-    """Przeszukaj pamięć długoterminową (semantic search po treści)."""
-    ns = (runtime.context.user_id, "facts")
-    hits = runtime.store.search(ns, query=query, limit=3)
-    if not hits:
-        return "Brak wspomnień na ten temat."
-    return "\n".join(f"- {h.value['text']}" for h in hits)
+def analyze_repository(question: str) -> dict:
+    """
+    Analyzes the repository code and returns findings supported by the source code
+    """
 
+    code_agent = CodeReadingAgent(llm)
 
-def safe_path(path: str) -> Path:
-    path = Path(path)
+    result = code_agent.graph.invoke({
+        "repo_path": "/",
+        "question": question,
+        "files": [],
+        "findings": [],
+        "errors": [],
+    })
 
-    # Jeśli podano już root, nie dokładaj go drugi raz
-    if path == WORK or WORK in path.parents:
-        return path
+    return {
+        "summary": result.get("summary", ""),
+        "findings": result.get("findings", []),
+        "limitations": result.get("limitations", []),
+        "errors": result.get("errors", []),
+    }
 
-    return WORK / path
+def resolve_project_path(path: str) -> Path:
+    """
+    Paths provided by LLM are relative to ALLOWED_DIR
+    use this method only for tools which do not use FilestystemBackend
+    :param path: path assumed virtual (virtual_mode=True)
+    :return: path prepended with ALLOWED_DIR
+    """
+
+    relative = Path(path.lstrip("/"))
+    target = (ALLOWED_DIR / relative).resolve()
+
+    if not target.is_relative_to(ALLOWED_DIR):
+        raise ValueError("Path is outside of project directory")
+
+    return target

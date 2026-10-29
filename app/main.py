@@ -3,12 +3,11 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-from log_parser import LogParser
 from llm_provider import connect_to_llm
-from tools import read_file, write_file, create_file, ls, glob, run_pytest, validate_puml
+from tools import read_file, write_file, create_file, ls, glob, run_pytest, validate_puml, validate_python_file, analyze_repository
 from input import system_prompt, prompt
+from log_parser import LogParser
 from agent import Agent
-
 
 def setup_loggers():
     Path("../logs/events").mkdir(exist_ok=True)
@@ -30,9 +29,11 @@ def setup_loggers():
     return event_logger
 
 async def main():
-    event_logger = setup_loggers()
+    logger = setup_loggers()
 
-    abot = Agent(connect_to_llm(), [read_file, write_file, create_file, ls, glob, run_pytest, validate_puml], system_prompt=system_prompt.messages[0].content)
+    abot = Agent(connect_to_llm(),
+                 [analyze_repository, read_file, write_file, create_file, ls, glob, run_pytest, validate_puml, validate_python_file],
+                 system_prompt=system_prompt.messages[0].content)
 
     new_parser = LogParser()
 
@@ -41,16 +42,15 @@ async def main():
                 "messages": prompt.messages
             },
             config={"configurable": {"thread_id": "1"}},
-            stream_mode=["tasks"],
+            stream_mode=["updates"],
             subgraphs=True,
     ):
-        event_logger.info(event)
+        logger.info(event)
 
         for n_event in new_parser.parse_chunk(event):
+            logger.info(n_event)
             if n_event.event_type in ("human_message", "model_response"):
                 print(f"{n_event.description} \n{"-" * 80}\nTokeny: {n_event.total_tokens} \n")
-
-
 
 if __name__ == "__main__":
     start = datetime.now()
